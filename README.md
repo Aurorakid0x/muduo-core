@@ -1,119 +1,142 @@
 # muduo-core
 
-> ⭐️ 本项目为【代码随想录知识星球】 教学项目
-> ⭐️ 在 [网络库项目专栏](https://www.programmercarl.com/other/project_muduo.html) 里详细讲解：项目前置知识 + 项目细节 + 代码解读 + 项目难点 + 面试题与回答 + 简历写法 + 项目拓展。 全面帮助你用这个项目求职面试！
+> **本项目目前只在[知识星球](https://programmercarl.com/other/kstar.html)答疑并维护**。
 
-## 项目介绍
+[知识星球](https://programmercarl.com/other/kstar.html)再添 CPP项目专栏， 关于网络库，知名的就是陈硕的muduo
 
-本项目是参考 muduo 实现的基于 多Reactor 模型的多线程网络库。使用 C++ 11 编写去除 muduo 对 boost 的依赖。
+之前也有不少录友，自己做一个muduo写到简历上。
 
-项目已经实现了 Channel 模块、Poller 模块、事件循环模块、日志模块、线程池模块、一致性哈希轮询算法。
+这次 我们从 面试的角度带大家速成muduo，**【项目细节】【项目面试常见问题汇总】【拓展出的基础知识汇总】【测试相关问题】【简历写法】** 都给大家安排的明明白白。
 
-## 开发环境
+## 为什么要做 muduo？
 
-* linux kernel version5.15.0-113-generic (ubuntu 22.04.6)
-* gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0
-* cmake version 3.22
+*  通过学习muduo网络库源码，一定程度上提升了linux网络编程能力;
+*  熟悉了网络编程及其下的线程池，缓冲区等设计，学习了多线程编程;
+*  通过深入了解muduo网络库源码，对经典的五种IO模型及Reactor模型有了更深的认识
+*  掌握基于事件驱动和事件回调的epoll+线程池面向对象编程。
 
-## 并发模型
+## 参考书籍
 
-![image.png](https://cdn.nlark.com/yuque/0/2022/png/26752078/1670853134528-c88d27f2-10a2-46d3-b308-48f7632a2f09.png?x-oss-process=image%2Fresize%2Cw_937%2Climit_0)
+* 陈硕（官方）：https://github.com/chenshuo/muduo/
+* 《Linux多线程服务器编程-使用 muduo C++网络库》-陈硕
+* 《Linux高性能服务器编程》-游双
 
-项目采用主从 多Reactor多线程 模型，MainReactor 只负责监听派发新连接，在 MainReactor 中通过 Acceptor 接收新连接并通过设计好的轮询算法派发给 SubReactor，SubReactor 负责此连接的读写事件。
+## 项目专栏目录
 
-调用 TcpServer 的 start 函数后，会内部创建线程池。每个线程独立的运行一个事件循环，即 SubReactor。MainReactor 从线程池中轮询获取 SubReactor 并派发给它新连接，处理读写事件的 SubReactor 个数一般和 CPU 核心数相等。使用主从 Reactor 模型有诸多优点：
-
-1. 响应快，不必为单个同步事件所阻塞，虽然 Reactor 本身依然是同步的；
-2. 可以最大程度避免复杂的多线程及同步问题，并且避免多线程/进程的切换；
-3. 扩展性好，可以方便通过增加 Reactor 实例个数充分利用 CPU 资源；
-4. 复用性好，Reactor 模型本身与具体事件处理逻辑无关，具有很高的复用性；
-
-## 构建项目
-
-安装基本工具
-
-```shell
-sudo apt-get update
-sudo apt-get install -y wget cmake build-essential unzip git
-```
-
-
-## 编译指令
-
-下载项目
-
-```shell
-git clone https://github.com/youngyangyang04/muduo-core.git
-```
-
-进入到muduo-core文件
-```shell
-cd muduo-core
-```
-
-创建build文件夹，并且进入build文件:
-```shell
-mkdir build && cd build
-```
-
-然后生成可执行程序文件：
-```shell
-cmake .. && make -j${nproc}
-```
-
-运行程序，进入example文件夹，并且执行可执行程序
-```shell
-cd example  &&  ./testserver
-```
-
-
-## 功能介绍
-
-- **事件轮询与分发模块**：`EventLoop.*`、`Channel.*`、`Poller.*`、`EPollPoller.*`负责事件轮询检测，并实现事件分发处理。`EventLoop`对`Poller`进行轮询，`Poller`底层由`EPollPoller`实现。
-- **线程与事件绑定模块**：`Thread.*`、`EventLoopThread.*`、`EventLoopThreadPool.*`绑定线程与事件循环，完成`one loop per thread`模型。
-- **网络连接模块**：`TcpServer.*`、`TcpConnection.*`、`Acceptor.*`、`Socket.*`实现`mainloop`对网络连接的响应，并分发到各`subloop`。
-- **缓冲区模块**：`Buffer.*`提供自动扩容缓冲区，保证数据有序到达。
-
-## 技术亮点
-
-1. **高并发非阻塞网络库**  
-   `muduo`采用`Reactor`多模型多线程的结合，实现了高并发非阻塞的网络库。
-
-2. **智能指针防止悬空指针**  
-   `TcpConnection`继承自`enable_shared_from_this`，其目的是防止在不该被释放对象的地方释放对象，导致悬空指针的产生。  
-   这样可以避免用户可能在处理`OnMessage`事件时删除对象，确保`TcpConnection`以正确方式释放。
-
-3. **唤醒机制**  
-   `EventLoop`中使用了`eventfd`来调用`wakeup()`，让`mainloop`唤醒`subloop`的`epoll_wait`阻塞。
-
-4. **一致性哈希轮询算法**  
-   新增`ConsistenHash`头文件，采用一致性哈希轮询算法，将`EventLoop`合理分发给每一个`TcpConnection`对象。  
-   此外，支持自定义哈希函数，满足高并发需求。但需要注意虚拟节点数量不能过少。
-
-5. **线程创建有序性**  
-   在`Thread`中通过`C++ lambda`表达式以及信号量机制，保证线程创建的有序性，确保线程正常创建后再执行线程函数。
-
-6. **非阻塞核心缓冲区**  
-   `Buffer.*`是`muduo`网络库非阻塞的核心模块。当触发相应的读写事件时，内核缓冲区可能没有足够空间一次性发送数据，此时有两种选择：  
-   - 第一种是将其设置为非阻塞，但可能造成 CPU 忙等待；  
-   - 第二种是阻塞等待内核缓冲区有空间再发送，但效率低下。  
-
-   为了解决这些问题，`Buffer`模块将多余数据存储在用户缓冲区，并注册相应的读写事件监听，待事件再次触发时统一发送。
-
-7. **灵活的日志模块**  
-   `Logger`支持设置日志等级。在调试代码时，可以开启`DEBUG`模式打印日志；而在服务器运行时，为了减少日志对性能的影响，可关闭`DEBUG`相关日志输出。
+* muduo网络库项目前言
+    * 为什么要做 muduo？
+    * 所需要的基础知识
+    * 参考书籍
+* 框架梳理
+* 并发框架
+    * Channel
+        * Channel类重要的成员变量：
+        * Channel类重要的成员方法
+    * Poller
+        * Poller/EpollPoller概述
+        * Poller/EpollPoller的重要成员变量：
+        * EpollPoller给外部提供的最重要的方法：
+    * EventLoop
+        * EventLoop概述：
+        * One Loop Per Thread 含义介绍
+        * 全局概览Poller、Channel和EventLoop在整个Multi-Reactor通信架构中的角色
+        * EventLoop重要方法 EventLoop:loop()：
+    * Acceptor
+        * Acceptor封装的重要成员变量
+        * Acceptor封装的重要成员方法
+    * tcpconnection
+        * TcpConnection的重要变量
+        * TcpConnection的重要成员方法：
+    * socket
+    * buffer
+        * 重要的成员方法：
+* 项目介绍
+    * 简单介绍一下你的项目
+* 项目面试常见问题汇总
+    * 项目中的难点？
+        * 如果TcpConnection中有正在发送的数据，怎么保证在触发TcpConnection关闭机制后，能先让TcpConnection先把数据发送完再释放TcpConnection对象的资源？
+    * 项目中遇到的困难？是如何解决的？
+        * 怎么保证一个线程只有一个EventLoop对象
+        * 怎么保证不该跨线程调用的函数不会跨线程调用
+    * 项目当中有什么亮点
+        * Channel的tie _ 涉及到的精妙之处
+* 项目细节
+    * 日志系统
+        * 异步日志流程
+        * 开启异步日志
+        * 把日志写入缓冲区
+    * 缓存机制
+        * Buffer数据结构
+        * 把socket上的数据写入Input Buffer
+        * 把用户数据通过output buffer发送给对方
+    * muduo定时器实现思路
+* 项目拓展出的基础知识汇总
+    * IO多路复用
+        * 说一下什么是ET，什么是LT，有什么区别？
+        * 为什么ET模式不可以文件描述符阻塞，而LT模式可以呢？
+        * 你用了epoll，说一下为什么用epoll，还有其他多路复用方式吗？区别是什么？
+    * 并发模型
+        * reactor、proactor模型的区别？
+        * reactor模式中，各个模式的区别？
+    * 测试相关问题
+* 简历写法 & 面试技巧
+    * 本项目简历写法
+    * 通用简历写法
+    * 面试技巧
+        * 八股
+        * 算法
+        * 实习
+        * 项目
 
 
-## 优化方向
 
-- 完善内存池和完善异步日志缓冲区、定时器、连接池。
-- 增加更多的测试用例,如HTTP、RPC。
-- 可以考虑引入协程库等模块
+## 简历写法
 
-## 致谢
+为了避免[知识星球](https://programmercarl.com/other/kstar.html)里大家学习这个项目写简历重复，本项目专栏提供了三种简历写法：
 
-- [作者-Shangyizhou]https://github.com/Shangyizhou/A-Tiny-Network-Library/tree/main
-- [作者-S1mpleBug]https://github.com/S1mpleBug/muduo_cpp11?tab=readme-ov-file
-- [作者-chenshuo]https://github.com/chenshuo/muduo
-- 《Linux高性能服务器编程》
-- 《Linux多线程服务端编程：使用muduo C++网络库》
+![](https://file1.kamacoder.com/i/algo/20240904205019.png)
+
+## 本项目常见问题
+
+面试中，面试官最喜欢问的就是项目难点，以及这个难点你是如何解决的。
+
+专栏里都给出明确的例子：
+
+![](https://file1.kamacoder.com/i/algo/20240904204734.png)
+
+## 项目亮点以及项目细节
+
+为了更好的掌握这个项目，亮点和细节都给大家讲清楚：
+
+![](https://file1.kamacoder.com/i/algo/20240904204822.png)
+
+## 项目拓展出的基础知识
+
+在做做项目的时候，最好的方式就是 理论基础知识和项目实战相结合。
+
+面试官也喜欢在 项目中问基础知识（八股文），本专栏也给出muduo可以拓展哪些基础知识
+
+![](https://file1.kamacoder.com/i/algo/20240904204936.png)
+
+## 项目专栏部分截图
+
+![](https://file1.kamacoder.com/i/algo/20240904204906.png)
+
+![](https://file1.kamacoder.com/i/algo/20240904205923.png)
+
+## 突击来用
+
+如果大家面试在即，实在没时间做项目了，可以直接按照专栏给出的【简历写法】，写到简历上，然后把项目专栏里的面试问题，都认真背一背就好了，基本覆盖 绝大多数 RPC项目问题。
+
+## 答疑
+
+本项目在[知识星球](https://programmercarl.com/other/kstar.html)里为 文字专栏形式，大家不用担心，看不懂，星球里每个项目有专属答疑群，任何问题都可以在群里问，都会得到解答：
+
+![](https://file1.kamacoder.com/i/web/2025-09-26_11-30-13.jpg)
+
+
+## 获取本项目专栏
+
+**本文档仅为星球内部专享，大家可以加入[知识星球](https://programmercarl.com/other/kstar.html)里获取，在星球置顶**
+
+
