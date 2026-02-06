@@ -62,7 +62,9 @@ EventLoop::EventLoop()
     
     wakeupChannel_->setReadCallback(
         std::bind(&EventLoop::handleRead, this)); // 设置wakeupfd的事件类型以及发生事件后的回调操作
-    
+        //std::bind: 这是 C++ 的一个高级工具。你可以把它理解为“打包”
+        //     这句话的意思是：告诉 wakeupChannel，如果那个“闹钟”响了（有读事件），就请去执行 EventLoop 里的 handleRead 这个函数。
+        // *   this 在这里是必须的，因为 handleRead 是一个类成员函数，执行它需要知道是哪个具体的 EventLoop 对象在调用。
     wakeupChannel_->enableReading(); // 每一个EventLoop都将监听wakeupChannel_的EPOLL读事件了
 }
 EventLoop::~EventLoop()
@@ -84,12 +86,20 @@ void EventLoop::loop()
     while (!quit_)
     {
         activeChannels_.clear();
-        pollRetureTime_ = poller_->poll(kPollTimeMs, &activeChannels_);
+        pollRetureTime_ = poller_->poll(kPollTimeMs, &activeChannels_);//pollRetureTime_ 是一个 时间戳变量。它记录了 Poller（底层的 epoll）检测到事件并返回的那一刻的时间。
         for (Channel *channel : activeChannels_)
         {
             // Poller监听哪些channel发生了事件 然后上报给EventLoop 通知channel处理相应的事件
             channel->handleEvent(pollRetureTime_);
         }
+        /** 1.  阻塞等待：poller_->poll 内部调用 epoll_wait。此时线程是“睡觉”的，不消耗 CPU。
+2.  事件发生：当有数据到达网卡，内核唤醒线程，epoll_wait 返回。
+3.  记录时间：poller 醒来后的第一件事就是调用 Timestamp::now() 抓取当前时间，存入 pollRetureTime_。
+4.  分发事件：
+    *   activeChannels_ 告诉 EventLoop：“fd 5 和 fd 8 有数据了！”
+    *   pollRetureTime_ 告诉 EventLoop：“这些事都是在 10:00:00.123456 发生的！”
+5.  回调业务：EventLoop 循环调用每个 Channel 的 handleEvent，并把这个时间戳像接力棒一样传下去。*/
+
         /**
          * 执行当前EventLoop事件循环需要处理的回调操作 对于线程数 >=2 的情况 IO线程 mainloop(mainReactor) 主要工作：
          * accept接收连接 => 将accept返回的connfd打包为Channel => TcpServer::newConnection通过轮询将TcpConnection对象分配给subloop处理
@@ -153,6 +163,22 @@ void EventLoop::queueInLoop(Functor cb)
         wakeup(); // 唤醒loop所在线程
     }
 }
+/**
+ * 条件 A：!isInLoopThread() （跨线程调用）
+*   场景：主线程（MainLoop）想让子线程（SubLoop）去处理一个新的连接。
+*   逻辑：此时主线程调用子线程的 queueInLoop。子线程此时很可能正卡在 poller_->poll()（也就是 epoll_wait）里睡觉。
+*   动作：主线程必须往 eventfd 里写个 1（调用 wakeup），把子线程从“睡觉”状态踢醒，否则子线程可能要睡很久才能醒来看到这个新任务。
+条件 B：callingPendingFunctors_ 为真（正在干活时又接了新活）
+*   场景：Loop 线程自己正在执行 doPendingFunctors()（也就是正在处理待办清单）。
+*   逻辑：
+    1.  注意看 doPendingFunctors 的代码，它会先用 swap 把任务取出来处理。
+    2.  如果在处理任务 Task1 的过程中，Task1 内部又调用了 queueInLoop(Task2)。
+    3.  此时 Task2 会被放进 pendingFunctors_（注意：是刚被清空的原始清单，不是当前正在处理的 local 清单）。
+    4.  处理完当前的 local 清单后，Loop 会回到顶部，再次进入 poller_->poll()。
+*   问题：如果不调用 wakeup，Loop 就会在处理完当前这一波任务后，立刻进入 poll() 再次睡觉。如果此时没有网络 IO 事件，刚才新加的 Task2 就会一直“压箱底”无法执行。
+*   动作：所以，如果正在干活（callingPendingFunctors_ 为真），必须也发一个 wakeup，保证下一次 poll() 能够瞬间返回，去处理刚才新接的 Task2。
+
+ */
 
 void EventLoop::handleRead()
 {
@@ -174,6 +200,19 @@ void EventLoop::wakeup()
         LOG_ERROR("EventLoop::wakeup() writes %lu bytes instead of 8\n", n);
     }
 }
+/**
+ * 1.  被动等待：此时，EventLoop 线程正卡在 poller_->poll() 这一行，也就是卡在 Linux 的 epoll_wait 系统调用里。此时线程是“睡眠”状态，不占用 CPU。
+2.  感知变化：因为 epoll 正在监控 wakeupFd_，而这个 fd 刚刚变为了“就绪”。
+3.  瞬间返回：内核会立刻“踢醒”这个睡眠的线程，让 epoll_wait 停止阻塞并立即返回。
+4.  执行回调：线程醒来后，从 poll() 函数向下走，看到 activeChannels_ 里有 wakeupChannel_，于是调用它的 handleEvent。
+5.  清空状态：handleEvent 最终会调用我们在构造函数里绑定的 handleRead：
+        void EventLoop::handleRead() {
+        uint64_t one = 1;
+        read(wakeupFd_, &one, sizeof(one)); // 把计数器读出来，重置为 0
+    }
+        读完之后，计数器变回 0，fd 再次变回“不可读”状态，等待下一次唤醒。
+
+ */
 
 // EventLoop的方法 => Poller的方法
 void EventLoop::updateChannel(Channel *channel)
